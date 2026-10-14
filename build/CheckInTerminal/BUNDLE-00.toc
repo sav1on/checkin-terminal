@@ -1,0 +1,3 @@
+([('CheckInTerminal',
+   '/Users/savionmorgancooper/nfc-card-reader/dist/CheckInTerminal',
+   'EXECUTABLE')],)
