@@ -75,6 +75,35 @@ def register_student_profile(nfc_id, name, birthday, em_name, em_rel, em_phone, 
     conn.close()
     return True, "Success"
 
+def update_student_profile(old_nfc_id, nfc_id, name, birthday, em_name, em_rel, em_phone, em_email, em_addr, allergies, photo_path):
+    old_nfc_id = str(old_nfc_id).strip()
+    nfc_id = str(nfc_id).strip()
+    if not nfc_id:
+        return False, "Badge UID is required."
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    conn.execute("BEGIN IMMEDIATE")
+    cursor.execute("SELECT 1 FROM students WHERE nfc_id = ? AND nfc_id != ?", (nfc_id, old_nfc_id))
+    if cursor.fetchone():
+        conn.rollback()
+        conn.close()
+        return False, "That badge UID is already assigned to another student."
+
+    cursor.execute('''
+        UPDATE students
+        SET nfc_id = ?, name = ?, birthday = ?, emergency_name = ?,
+            emergency_relationship = ?, emergency_phone = ?, emergency_email = ?,
+            emergency_address = ?, allergies = ?, photo_path = ?
+        WHERE nfc_id = ?
+    ''', (nfc_id, name, birthday, em_name, em_rel, em_phone, em_email, em_addr, allergies, photo_path, old_nfc_id))
+    updated = cursor.rowcount
+    conn.commit()
+    conn.close()
+    if not updated:
+        return False, "The student profile could not be found."
+    return True, "Success"
+
 def register_employee_profile(nfc_id, name, photo_path):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -88,6 +117,32 @@ def register_employee_profile(nfc_id, name, photo_path):
     
     conn.commit()
     conn.close()
+    return True, "Success"
+
+def update_employee_profile(old_nfc_id, nfc_id, name, photo_path):
+    old_nfc_id = str(old_nfc_id).strip()
+    nfc_id = str(nfc_id).strip()
+    if not nfc_id:
+        return False, "Badge UID is required."
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    conn.execute("BEGIN IMMEDIATE")
+    cursor.execute("SELECT 1 FROM employees WHERE nfc_id = ? AND nfc_id != ?", (nfc_id, old_nfc_id))
+    if cursor.fetchone():
+        conn.rollback()
+        conn.close()
+        return False, "That badge UID is already assigned to another employee."
+
+    cursor.execute(
+        "UPDATE employees SET nfc_id = ?, name = ?, photo_path = ? WHERE nfc_id = ?",
+        (nfc_id, name, photo_path, old_nfc_id)
+    )
+    updated = cursor.rowcount
+    conn.commit()
+    conn.close()
+    if not updated:
+        return False, "The employee profile could not be found."
     return True, "Success"
 
 def delete_student_profile(nfc_id):

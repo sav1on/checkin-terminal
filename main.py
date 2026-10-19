@@ -12,6 +12,7 @@ import json
 import webbrowser
 from database import (
     init_db, register_student_profile, register_employee_profile, 
+    update_student_profile, update_employee_profile,
     delete_student_profile, delete_employee_profile,
     log_student_checkin, log_employee_clock, get_students_with_todays_activity, 
     search_students_with_activity, get_all_employees, get_employee_hours_report, 
@@ -25,7 +26,7 @@ cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_FATAL)
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
-CURRENT_VERSION = "1.0.0"
+CURRENT_VERSION = "1.0.1"
 
 class CheckInApp:
     def __init__(self, root):
@@ -432,7 +433,7 @@ class CheckInApp:
         card = ctk.CTkFrame(f, corner_radius=15)
         card.pack(fill="both", expand=True, padx=10, pady=10)
 
-        ctk.CTkLabel(card, text="👥 All Registered Employees (Double-click row to edit profile)", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=15)
+        ctk.CTkLabel(card, text="👥 All Registered Employees (Double-click row to clock in/out)", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=15)
 
         table_frame = ctk.CTkFrame(card)
         table_frame.pack(fill="both", expand=True, padx=20, pady=15)
@@ -444,16 +445,37 @@ class CheckInApp:
             self.emp_tree.column(col, width=220, anchor="center")
         
         self.emp_tree.pack(side="left", fill="both", expand=True)
-        self.emp_tree.bind("<Double-1>", self.open_employee_profile_editor)
+        self.emp_tree.bind("<Double-1>", self.manual_employee_clock)
         
         scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.emp_tree.yview)
         scrollbar.pack(side="right", fill="y")
         self.emp_tree.configure(yscrollcommand=scrollbar.set)
 
-        btn_refresh = ctk.CTkButton(card, text="Refresh Employee List", command=self.refresh_employee_directory)
-        btn_refresh.pack(pady=10)
+        employee_actions = ctk.CTkFrame(card, fg_color="transparent")
+        employee_actions.pack(pady=10)
+        ctk.CTkButton(employee_actions, text="Open Selected Profile", command=self.open_employee_profile_editor).pack(side="left", padx=5)
+        ctk.CTkButton(employee_actions, text="Refresh Employee List", command=self.refresh_employee_directory).pack(side="left", padx=5)
 
         self.refresh_employee_directory()
+
+    def manual_employee_clock(self, event):
+        item_id = self.emp_tree.identify_row(event.y)
+        if not item_id:
+            return "break"
+        item = self.emp_tree.item(item_id)
+        tags = item.get("tags", ())
+        values = item.get("values", [])
+        nfc_id = str(tags[0] if tags else values[0]).strip() if values else ""
+        if not nfc_id:
+            return "break"
+
+        name, action, timestamp, _ = log_employee_clock(nfc_id)
+        if not name:
+            messagebox.showerror("Clock Error", "Could not find the selected employee profile.")
+            return "break"
+        messagebox.showinfo("Employee Time Clock", f"{name} was manually clocked {action.lower()} at {timestamp}.")
+        self.refresh_employee_directory()
+        return "break"
 
     def refresh_employee_directory(self):
         for row in self.emp_tree.get_children():
@@ -463,8 +485,8 @@ class CheckInApp:
             photo_status = "Has Photo" if photo_path and os.path.exists(photo_path) else "No Photo"
             self.emp_tree.insert("", ctk.END, values=(clean_nfc, name, photo_status), tags=(clean_nfc,))
 
-    def open_employee_profile_editor(self, event):
-        item_id = self.emp_tree.identify_row(event.y)
+    def open_employee_profile_editor(self, event=None):
+        item_id = self.emp_tree.identify_row(event.y) if event is not None else ""
         if not item_id or item_id == "":
             item_id = self.emp_tree.focus()
         if not item_id:
@@ -504,10 +526,15 @@ class CheckInApp:
         form = ctk.CTkFrame(edit_win, fg_color="transparent")
         form.pack(pady=10)
 
-        ctk.CTkLabel(form, text="Full Name:").grid(row=0, column=0, sticky="w", padx=10, pady=8)
+        ctk.CTkLabel(form, text="Badge UID:").grid(row=0, column=0, sticky="w", padx=10, pady=8)
+        nfc_ent = ctk.CTkEntry(form, width=220)
+        nfc_ent.insert(0, row[0])
+        nfc_ent.grid(row=0, column=1, padx=10, pady=8)
+
+        ctk.CTkLabel(form, text="Full Name:").grid(row=1, column=0, sticky="w", padx=10, pady=8)
         name_ent = ctk.CTkEntry(form, width=220)
         name_ent.insert(0, row[1])
-        name_ent.grid(row=0, column=1, padx=10, pady=8)
+        name_ent.grid(row=1, column=1, padx=10, pady=8)
 
         current_photo = [row[2]]
 
@@ -536,12 +563,18 @@ class CheckInApp:
         ctk.CTkButton(edit_win, text="📷 Retake Photo", fg_color="#D35400", command=change_photo).pack(pady=5)
 
         def save_changes():
+            new_nfc_id = nfc_ent.get().strip()
             new_name = name_ent.get().strip()
-            if new_name:
-                register_employee_profile(row[0], new_name, current_photo[0])
-                messagebox.showinfo("Success", "Employee profile updated successfully!")
-                edit_win.destroy()
-                self.refresh_employee_directory()
+            if not new_name:
+                messagebox.showerror("Invalid Profile", "Employee name is required.")
+                return
+            success, message = update_employee_profile(row[0], new_nfc_id, new_name, current_photo[0])
+            if not success:
+                messagebox.showerror("Unable to Save Profile", message)
+                return
+            messagebox.showinfo("Success", "Employee profile updated successfully!")
+            edit_win.destroy()
+            self.refresh_employee_directory()
 
         def delete_profile():
             if messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete employee '{row[1]}' from the system?"):
@@ -700,7 +733,7 @@ class CheckInApp:
         card = ctk.CTkFrame(f, corner_radius=15)
         card.pack(fill="both", expand=True, padx=10, pady=10)
 
-        ctk.CTkLabel(card, text="Saved Student Directory & Today's Status (Double-click row to edit profile)", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=15)
+        ctk.CTkLabel(card, text="Saved Student Directory & Today's Status (Double-click row to check in/out)", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=15)
 
         search_bar = ctk.CTkFrame(card, fg_color="transparent")
         search_bar.pack(fill="x", padx=20, pady=5)
@@ -713,6 +746,7 @@ class CheckInApp:
         btn_search = ctk.CTkButton(search_bar, text="Search", command=self.perform_search, width=100)
         btn_search.pack(side="left", padx=5)
 
+        ctk.CTkButton(search_bar, text="Open Selected Profile", command=self.open_student_profile_editor, width=150).pack(side="left", padx=5)
         btn_show_all = ctk.CTkButton(search_bar, text="Show All", command=self.refresh_student_directory, width=100)
         btn_show_all.pack(side="right", padx=5)
 
@@ -726,13 +760,32 @@ class CheckInApp:
             self.lookup_tree.column(col, width=120, anchor="center")
         
         self.lookup_tree.pack(side="left", fill="both", expand=True)
-        self.lookup_tree.bind("<Double-1>", self.open_student_profile_editor)
+        self.lookup_tree.bind("<Double-1>", self.manual_student_checkin)
         
         scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.lookup_tree.yview)
         scrollbar.pack(side="right", fill="y")
         self.lookup_tree.configure(yscrollcommand=scrollbar.set)
 
         self.refresh_student_directory()
+
+    def manual_student_checkin(self, event):
+        item_id = self.lookup_tree.identify_row(event.y)
+        if not item_id:
+            return "break"
+        item = self.lookup_tree.item(item_id)
+        tags = item.get("tags", ())
+        values = item.get("values", [])
+        nfc_id = str(tags[0] if tags else values[0]).strip() if values else ""
+        if not nfc_id:
+            return "break"
+
+        data = log_student_checkin(nfc_id)
+        if not data:
+            messagebox.showerror("Check-In Error", "Could not find the selected student profile.")
+            return "break"
+        messagebox.showinfo("Student Check-In", f"{data['name']} was manually checked {data['action'].lower()} at {data['timestamp']}.")
+        self.refresh_student_directory()
+        return "break"
 
     def refresh_student_directory(self):
         for row in self.lookup_tree.get_children():
@@ -753,8 +806,8 @@ class CheckInApp:
             formatted_row = (clean_nfc,) + row[1:]
             self.lookup_tree.insert("", ctk.END, values=formatted_row, tags=(clean_nfc,))
 
-    def open_student_profile_editor(self, event):
-        item_id = self.lookup_tree.identify_row(event.y)
+    def open_student_profile_editor(self, event=None):
+        item_id = self.lookup_tree.identify_row(event.y) if event is not None else ""
         if not item_id or item_id == "":
             item_id = self.lookup_tree.focus()
         if not item_id:
@@ -778,7 +831,7 @@ class CheckInApp:
 
         edit_win = ctk.CTkToplevel(self.root)
         edit_win.title(f"Student Profile: {row[1]}")
-        edit_win.geometry("500x750")
+        edit_win.geometry("500x790")
         edit_win.grab_set()
 
         scroll_c = ctk.CTkScrollableFrame(edit_win, corner_radius=10)
@@ -797,8 +850,10 @@ class CheckInApp:
         form = ctk.CTkFrame(scroll_c, fg_color="transparent")
         form.pack(pady=5)
 
-        ctk.CTkLabel(form, text="NFC UID (Locked):").grid(row=0, column=0, sticky="w", padx=10, pady=6)
-        ctk.CTkLabel(form, text=row[0], font=ctk.CTkFont(weight="bold")).grid(row=0, column=1, sticky="w", padx=10, pady=6)
+        ctk.CTkLabel(form, text="Badge UID:").grid(row=0, column=0, sticky="w", padx=10, pady=6)
+        nfc_ent = ctk.CTkEntry(form, width=240)
+        nfc_ent.insert(0, row[0])
+        nfc_ent.grid(row=0, column=1, padx=10, pady=6)
 
         ctk.CTkLabel(form, text="Full Name:").grid(row=1, column=0, sticky="w", padx=10, pady=6)
         name_ent = ctk.CTkEntry(form, width=240)
@@ -867,11 +922,14 @@ class CheckInApp:
         ctk.CTkButton(scroll_c, text="📷 Retake Student Photo", fg_color="#D35400", command=retake_photo).pack(pady=8)
 
         def save_student_edits():
-            register_student_profile(
-                row[0], name_ent.get().strip(), bday_ent.get().strip(),
+            success, message = update_student_profile(
+                row[0], nfc_ent.get().strip(), name_ent.get().strip(), bday_ent.get().strip(),
                 em_name_ent.get().strip(), em_rel_ent.get().strip(), em_phone_ent.get().strip(),
                 em_email_ent.get().strip(), em_addr_ent.get().strip(), allergies_ent.get().strip(), current_photo[0]
             )
+            if not success:
+                messagebox.showerror("Unable to Save Profile", message)
+                return
             messagebox.showinfo("Success", "Student profile updated successfully!")
             edit_win.destroy()
             self.refresh_student_directory()
@@ -939,3 +997,17 @@ if __name__ == "__main__":
     root = ctk.CTk()
     app = CheckInApp(root)
     root.mainloop()
+import updater
+
+# Inside your CustomTkinter window / button handler:
+def on_update_button_click(self):
+    self.update_button.configure(state="disabled", text="Checking...")
+    
+    # Callback to re-enable button after check finishes
+    def reset_button():
+        self.update_button.configure(state="normal", text="Check for Updates")
+
+    updater.trigger_github_update_flow(
+        parent_window=self, 
+        on_finish_callback=reset_button
+    )
